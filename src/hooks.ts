@@ -1,224 +1,233 @@
-/* eslint-disable no-console */
-import moment from 'moment/moment';
-import chalk from 'chalk';
-import qs from 'qs';
-import async from 'async';
+import { logger } from './logger.js';
 
 const { DISABLE_REDIS_CACHE, ENABLE_REDIS_CACHE_LOGGER } = process.env;
-const HTTP_OK = 200;
 const HTTP_SERVER_ERROR = 500;
-const defaults = {
-  defaultExpiration: 3600 * 24, // seconds
+
+type PassedOptions = {
+  env?: string;
+  expiration?: number;
+  defaultExpiration?: number;
+  // Funciones opcionales para agrupar o personalizar clave
+  cacheGroupKey?: (hook: any) => string | number;
+  cacheKey?: (hook: any) => string;
 };
 
+const defaults = {
+  defaultExpiration: 3600 * 24, // seconds
+} as const;
+
+/* -------------------- Utils -------------------- */
+
+function stableStringify(obj: unknown): string {
+  const seen = new WeakSet();
+
+  const normalize = (value: any): any => {
+    if (value === null) return null;
+
+    const t = typeof value;
+    if (t === 'bigint') return value.toString();
+    if (t === 'number' || t === 'string' || t === 'boolean') return value;
+    if (t === 'undefined' || t === 'function') return undefined;
+
+    if (value instanceof Date) return value.toISOString();
+
+    if (Array.isArray(value)) {
+      let changed = false;
+      const out = new Array(value.length);
+      for (let i = 0; i < value.length; i++) {
+        const v = normalize(value[i]);
+        if (v !== value[i]) changed = true;
+        out[i] = v;
+      }
+      // Filtramos undefined para estabilidad
+      return changed ? out.filter(v => v !== undefined) : out;
+    }
+
+    if (t === 'object') {
+      if (seen.has(value)) return '[Circular]';
+      seen.add(value);
+      const keys = Object.keys(value).sort();
+      const out: Record<string, any> = {};
+      for (const k of keys) {
+        const v = normalize(value[k]);
+        if (v !== undefined) out[k] = v;
+      }
+      seen.delete(value);
+      return out;
+    }
+
+    return String(value);
+  };
+
+  return JSON.stringify(normalize(obj));
+}
+
 export function hashCode(s: string): string {
-  let h;
-  for (let i = 0; i < s.length; i++) {
-    h = Math.imul(31, h) + s.charCodeAt(i) | 0;
-  }
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
   return String(h);
 }
 
-function cacheKey(hook) {
-  const q = hook.params.query || {};
-  const p = hook.params.paginate === false ? 'disabled' : 'enabled';
-  let path = `pagination-hook:${p}::${hook.path}`;
-
-  if (hook.id) {
-    path += `/${hook.id}`;
-  }
-
-  if (Object.keys(q).length > 0) {
-    path += `?${qs.stringify(JSON.parse(JSON.stringify(q)), { encode: false })}`;
-  }
-
-  // {prefix}{group}{key}
-  return `${hashCode(hook.path)}${hashCode(path)}`;
+function humanizeSeconds(seconds: number) {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  if (mins < 60) return secs ? `${mins}m ${secs}s` : `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const remM = mins % 60;
+  return remM ? `${hrs}h ${remM}m` : `${hrs}h`;
 }
 
-export async function purgeGroup(client, group: string, prefix: string = 'frc_') {
-  return new Promise((resolve, reject) => {
-    let cursor = '0';
+/** Construye { group, key } de forma determinista y compacta */
+function makeKeys(hook: any, opts: PassedOptions) {
+  const paginateTag = hook.params?.paginate === false ? 'disabled' : 'enabled';
+  const basePath = `pagination-hook:${paginateTag}::${hook.path}${hook.id != null ? `/${hook.id}` : ''}`;
 
-    function scan() {
-        client.scan(cursor, 'MATCH', `${prefix}${group}*`, 'COUNT', '10000', function (err, reply) {
-          if (err) return reject(err);
-          if (!Array.isArray(reply[1]) || !reply[1][0]) return resolve();
+  const q = hook.params?.query;
+  const qStr = q && Object.keys(q).length ? stableStringify(q) : '';
+  const raw = qStr ? `${basePath}?${qStr}` : basePath;
 
-          cursor = reply[0];
-          const keys = reply[1];
-          const batchKeys = keys.reduce((a, c) => {
-            if (Array.isArray(a[a.length - 1]) && a[a.length - 1].length < 100) {
-              a[a.length - 1].push(c.replace(prefix, ''));
-            } else if (!Array.isArray(a[a.length - 1]) || a[a.length - 1].length >= 100) {
-              a.push([c.replace(prefix, '')]);
-            }
-            return a;
-          }, []);
+  // Grupo
+  const groupSeed =
+    typeof opts.cacheGroupKey === 'function'
+      ? `group-${opts.cacheGroupKey(hook)}`
+      : `group-${hook.path || 'general'}`;
+  const group = hashCode(groupSeed);
 
-          async.eachOfLimit(batchKeys, 10, (batch, idx, cb) => {
-            if (client.unlink) {
-              client.unlink(batch, cb);
-            } else {
-              client.del(batch, cb);
-            }
-          }, (err) => {
-            if (err) return reject(err);
-            return scan();
-          });
-        });
+  // Clave final (compacta): group + hash del “raw”
+  const key = typeof opts.cacheKey === 'function'
+    ? `${group}${opts.cacheKey(hook)}`
+    : `${group}${hashCode(raw)}`;
+
+  return { group, key };
+}
+
+/* -------------------- Purge -------------------- */
+
+/**
+ * Purga todas las claves que empiecen por {keyPrefix}{group}
+ * Usa SCAN + UNLINK por lotes para no bloquear.
+ */
+export async function purgeGroup(client: any, group: string, keyPrefix = 'frc_') {
+  let cursor = '0';
+  const match = `${keyPrefix}${group}*`;
+  const batchSize = 1000;
+
+  do {
+    const [nextCursor, keys] = await client.scan(cursor, 'MATCH', match, 'COUNT', batchSize);
+    cursor = nextCursor;
+
+    if (Array.isArray(keys) && keys.length) {
+      const pipe = client.pipeline();
+      for (const k of keys) pipe.unlink(k);
+      await pipe.exec();
     }
-
-    return scan();
-  });
+  } while (cursor !== '0');
 }
+
+/* -------------------- Hook -------------------- */
 
 export default {
-  before(passedOptions: any = {}) {
-    if (DISABLE_REDIS_CACHE === 'true') {
-      return hook => hook;
-    }
+  before(passedOptions: PassedOptions = {}) {
+    if (DISABLE_REDIS_CACHE === 'true') return (hook: any) => hook;
 
-    return function (hook) {
+    return async function beforeHook(hook: any) {
+      // fast exits
+      if (hook?.params?.$skipCacheHook) return hook;
+
+      const client = hook.app.get('redisClient');
+      if (!client) return hook;
+
+      const options = { ...defaults, ...passedOptions };
+      const { group, key } = makeKeys(hook, options);
+
+      hook.params ||= {};
+      hook.params.cacheKey = key;
+      hook.params.cacheGroup = group;
+
+      const reply = await client.get(key);
+      if (!reply) return hook;
+
+      let data: any;
       try {
-        if (hook && hook.params && hook.params.$skipCacheHook) {
-          return Promise.resolve(hook);
-        }
-
-        return new Promise(resolve => {
-          const client = hook.app.get('redisClient');
-          const options = { ...defaults, ...passedOptions };
-
-          if (!client) {
-            return resolve(hook);
-          }
-
-          const group = typeof options.cacheGroupKey === 'function' ?
-            hashCode(`group-${options.cacheGroupKey(hook)}`) :
-            hashCode(`group-${hook.path || 'general'}`);
-          const path = typeof options.cacheKey === 'function' ?
-            `${group}${options.cacheKey(hook)}` :
-            `${group}${cacheKey(hook)}`;
-
-          hook.params.cacheKey = path;
-
-          client.get(path, (err, reply) => {
-            if (err) {
-              return resolve(hook);
-            }
-
-            if (reply) {
-              const data = JSON.parse(reply);
-
-              if (!data || !data.expiresOn || !data.cache) {
-                return resolve(hook);
-              }
-
-              const duration = moment(data.expiresOn).format('DD MMMM YYYY - HH:mm:ss');
-
-              hook.result = data.cache;
-              hook.params.$skipCacheHook = true;
-
-              if (options.env !== 'test' && ENABLE_REDIS_CACHE_LOGGER === 'true') {
-                console.log(`${chalk.cyan('[redis]')} returning cached value for ${chalk.green(path)}.`);
-                console.log(`> Expires on ${duration}.`);
-              }
-
-              return resolve(hook);
-            }
-
-            return resolve(hook);
-          });
-        });
-      } catch (err) {
-        console.error(err);
-        return Promise.resolve(hook);
+        data = JSON.parse(reply);
+      } catch {
+        // valor corrupto → ignoramos caché
+        return hook;
       }
+
+      if (!data || !data.expiresOn || data.cache == null) return hook;
+
+      hook.result = data.cache;
+      hook.params.$skipCacheHook = true;
+
+      if (options.env !== 'test' && ENABLE_REDIS_CACHE_LOGGER === 'true') {
+        logger.info(`[redis] returning cached value for ${key}.`);
+        logger.info(`> Expires on ${new Date(data.expiresOn).toISOString()}.`);
+      }
+
+      return hook;
     };
   },
-  after(passedOptions: any = {}) {
-    if (DISABLE_REDIS_CACHE === 'true') {
-      return hook => hook;
-    }
 
-    return function (hook) {
-      try {
-        if (
-          hook
-          && hook.params
-          && hook.params.$skipCacheHook
-        ) {
-          return Promise.resolve(hook);
-        }
+  after(passedOptions: PassedOptions = {}) {
+    if (DISABLE_REDIS_CACHE === 'true') return (hook: any) => hook;
 
-        if (!hook.result) {
-          return Promise.resolve(hook);
-        }
+    return async function afterHook(hook: any) {
+      // fast exits
+      if (hook?.params?.$skipCacheHook) return hook;
+      if (hook?.result == null) return hook;
 
-        return new Promise((resolve) => {
-          const client = hook.app.get('redisClient');
-          const options = { ...defaults, ...passedOptions };
-          const duration = options.expiration || options.defaultExpiration;
-          const { cacheKey } = hook.params;
+      const client = hook.app.get('redisClient');
+      if (!client) return hook;
 
-          if (!client) {
-            return resolve(hook);
-          }
+      const options = { ...defaults, ...passedOptions };
+      const duration = options.expiration ?? options.defaultExpiration;
+      const cacheKey = hook.params?.cacheKey as string | undefined;
+      if (!cacheKey) return hook;
 
-          client.set(cacheKey, JSON.stringify({
-            cache: hook.result,
-            expiresOn: moment().add(moment.duration(duration, 'seconds')),
-          }));
-          client.expire(cacheKey, duration);
+      // calculamos expiresOn una sola vez
+      const expiresOn = new Date(Date.now() + duration * 1000).toISOString();
 
-          if (options.env !== 'test' && ENABLE_REDIS_CACHE_LOGGER === 'true') {
-            console.log(`${chalk.cyan('[redis]')} added ${chalk.green(cacheKey)} to the cache.`);
-            console.log(`> Expires in ${moment.duration(duration, 'seconds').humanize()}.`);
-          }
+      // set con expiración
+      await client.set(
+        cacheKey,
+        JSON.stringify({ cache: hook.result, expiresOn }),
+        'EX',
+        duration
+      );
 
-          resolve(hook);
-        });
-      } catch (err) {
-        console.error(err);
-        return Promise.resolve(hook);
+      if (options.env !== 'test' && ENABLE_REDIS_CACHE_LOGGER === 'true') {
+        logger.info(`[redis] added ${cacheKey} to the cache.`);
+        logger.info(`> Expires in ${humanizeSeconds(duration)}.`);
       }
+
+      return hook;
     };
   },
-  purge(passedOptions = {}) {
-    if (DISABLE_REDIS_CACHE === 'true') {
-      return hook => hook;
-    }
 
-    return function (hook) {
-      try {
-        return new Promise((resolve) => {
-          const client = hook.app.get('redisClient');
-          const options: any = { ...defaults, ...passedOptions };
-          const { prefix } = hook.app.get('redis');
-          const group = typeof options.cacheGroupKey === 'function' ?
-            hashCode(`group-${options.cacheGroupKey(hook)}`) :
-            hashCode(`group-${hook.path || 'general'}`);
+  purge(passedOptions: PassedOptions = {}) {
+    if (DISABLE_REDIS_CACHE === 'true') return (hook: any) => hook;
 
-          if (!client) {
-            return {
-              message: 'Redis unavailable',
-              status: HTTP_SERVER_ERROR,
-            };
-          }
-
-          purgeGroup(client, group, prefix)
-            .catch((err) => console.error({
-              message: err.message,
-              status: HTTP_SERVER_ERROR,
-            }));
-
-          // do not wait for purge to resolve
-          resolve(hook);
-        });
-      } catch (err) {
-        console.error(err);
-        return Promise.resolve(hook);
+    return async function purgeHook(hook: any) {
+      const client = hook.app.get('redisClient');
+      if (!client) {
+        return { message: 'Redis unavailable', status: HTTP_SERVER_ERROR };
       }
+
+      const options = { ...defaults, ...passedOptions };
+      const appRedisCfg = hook.app.get('redis') || {};
+      const keyPrefix: string = appRedisCfg.keyPrefix ?? 'frc_';
+
+      // Reusamos la misma función de grupo para asegurar coincidencia
+      const { group } = makeKeys(hook, options);
+
+      // fire-and-forget con captura de error
+      purgeGroup(client, group, keyPrefix).catch((err) =>
+        logger.error({ message: err?.message ?? String(err), status: HTTP_SERVER_ERROR })
+      );
+
+      return hook;
     };
   },
 };

@@ -1,9 +1,13 @@
-export const client = require('./client').default;
-export const services = require('./services').default;
-export const hooks = require('./hooks').default;
+import client from './client.js';
+import services from './services.js';
+import hooks from './hooks.js';
 
+// 🔹 exportaciones individuales
+export { client, services, hooks };
+
+// 🔹 exportación por defecto (objeto completo)
 export default {
   client,
   services,
-  hooks,
-}
+  hooks
+};

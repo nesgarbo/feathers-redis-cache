@@ -16,10 +16,10 @@
 ### Installation
 
 ```
-  yarn add feathers-redis-cache
+  yarn add @nesgarbo/feathers-redis-cache
 ```    
 ```
-  npm install feathers-redis-cache
+  npm install @nesgarbo/feathers-redis-cache
 ```    
 
 ## Purpose

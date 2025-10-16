@@ -1,209 +1,118 @@
-"use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : new P(function (resolve) { resolve(result.value); }).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-var __generator = (this && this.__generator) || function (thisArg, body) {
-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
-    function verb(n) { return function (v) { return step([n, v]); }; }
-    function step(op) {
-        if (f) throw new TypeError("Generator is already executing.");
-        while (_) try {
-            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
-            if (y = 0, t) op = [op[0] & 2, t.value];
-            switch (op[0]) {
-                case 0: case 1: t = op; break;
-                case 4: _.label++; return { value: op[1], done: false };
-                case 5: _.label++; y = op[1]; op = [0]; continue;
-                case 7: op = _.ops.pop(); _.trys.pop(); continue;
-                default:
-                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
-                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
-                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
-                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
-                    if (t[2]) _.ops.pop();
-                    _.trys.pop(); continue;
-            }
-            op = body.call(thisArg, _);
-        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
-        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+import { purgeGroup, hashCode } from './hooks.js';
+const { DISABLE_REDIS_CACHE } = process.env;
+const HTTP_OK = 200;
+const HTTP_NO_CONTENT = 204;
+const HTTP_SERVER_ERROR = 500;
+const HTTP_BAD_REQUEST = 400;
+const DEFAULT_PREFIX = 'frc_';
+function getKeyPrefix(app) {
+    const cfg = app.get('redis') || {};
+    const p = cfg.keyPrefix ?? cfg.prefix ?? DEFAULT_PREFIX;
+    return typeof p === 'string' ? p : DEFAULT_PREFIX;
+}
+function stripPrefix(key, prefix) {
+    return prefix && key.startsWith(prefix) ? key.slice(prefix.length) : key;
+}
+function ensureClient(app) {
+    const client = app.get('redisClient');
+    if (!client) {
+        return { error: { message: 'Redis unavailable', status: HTTP_SERVER_ERROR } };
     }
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-var hooks_1 = require("./hooks");
-var DISABLE_REDIS_CACHE = process.env.DISABLE_REDIS_CACHE;
-var HTTP_OK = 200;
-var HTTP_NO_CONTENT = 204;
-var HTTP_SERVER_ERROR = 500;
-var HTTP_NOT_FOUND = 404;
-var serviceClearSingle = {
-    setup: function (app, path) {
-        this.app = app;
-        this.path = path;
-    },
-    find: function (params) {
-        return __awaiter(this, void 0, void 0, function () {
-            var client, target;
-            return __generator(this, function (_a) {
-                client = this.app.get('redisClient');
-                target = params.query.target;
-                if (!target) {
-                    return [2, {
-                            message: 'You must provide key',
-                            status: HTTP_NOT_FOUND
-                        }];
-                }
-                if (!client) {
-                    return [2, {
-                            message: 'Redis unavailable',
-                            status: HTTP_SERVER_ERROR
-                        }];
-                }
-                return [2, new Promise(function (resolve) {
-                        var del = client.unlink || client.del;
-                        client.get(target, function (err, reply) {
-                            if (err) {
-                                return resolve({ message: 'something went wrong' + err.message });
-                            }
-                            if (!reply) {
-                                return resolve({
-                                    message: "cache already cleared for key " + target,
-                                    status: HTTP_NO_CONTENT
-                                });
-                            }
-                            del(target, function (err, reply) {
-                                if (err) {
-                                    return resolve({ message: 'something went wrong' + err.message });
-                                }
-                                if (!reply) {
-                                    return resolve({
-                                        message: "cache already cleared for key " + target,
-                                        status: HTTP_NO_CONTENT
-                                    });
-                                }
-                                resolve({
-                                    message: "cache cleared for key " + target,
-                                    status: HTTP_OK
-                                });
-                            });
-                        });
-                    })];
-            });
-        });
-    },
-};
-var serviceClearGroup = {
-    setup: function (app, path) {
-        this.app = app;
-        this.path = path;
-    },
-    find: function (params) {
-        return __awaiter(this, void 0, void 0, function () {
-            var client, prefix, target, targetGroup;
-            return __generator(this, function (_a) {
-                client = this.app.get('redisClient');
-                prefix = this.app.get('redis').prefix;
-                target = params.query.target;
-                targetGroup = target ? hooks_1.hashCode("group-" + target) : '';
-                if (!client) {
-                    return [2, {
-                            message: 'Redis unavailable',
-                            status: HTTP_SERVER_ERROR
-                        }];
-                }
-                if (!targetGroup) {
-                    return [2, {
-                            message: 'Target is required',
-                            status: HTTP_SERVER_ERROR
-                        }];
-                }
-                return [2, hooks_1.purgeGroup(client, targetGroup, prefix)
-                        .then(function () { return ({
-                        message: "cache cleared for group " + target,
-                        status: HTTP_OK,
-                    }); })
-                        .catch(function (err) { return ({
-                        message: err.message,
-                        status: HTTP_SERVER_ERROR,
-                    }); })];
-            });
-        });
-    },
-};
-var serviceClearAll = {
-    setup: function (app, path) {
-        this.app = app;
-        this.path = path;
-    },
-    find: function () {
-        return __awaiter(this, void 0, void 0, function () {
-            var client, prefix;
-            return __generator(this, function (_a) {
-                client = this.app.get('redisClient');
-                prefix = this.app.get('redis').prefix;
-                if (!client) {
-                    return [2, {
-                            message: 'Redis unavailable',
-                            status: HTTP_SERVER_ERROR
-                        }];
-                }
-                return [2, hooks_1.purgeGroup(client, '', prefix)
-                        .then(function () { return ({
-                        message: 'cache cleared',
-                        status: HTTP_OK,
-                    }); })
-                        .catch(function (err) { return ({
-                        message: err.message,
-                        status: HTTP_SERVER_ERROR,
-                    }); })];
-            });
-        });
-    },
-};
-var serviceFlashDb = {
-    setup: function (app, path) {
-        this.app = app;
-        this.path = path;
-    },
-    find: function () {
-        return __awaiter(this, void 0, void 0, function () {
-            var client;
-            return __generator(this, function (_a) {
-                client = this.app.get('redisClient');
-                if (!client) {
-                    return [2, {
-                            message: 'Redis unavailable',
-                            status: HTTP_SERVER_ERROR
-                        }];
-                }
-                return [2, new Promise(function (resolve) {
-                        client.flushdb(function () {
-                            resolve({
-                                message: 'Cache cleared',
-                                status: HTTP_OK
-                            });
-                        });
-                    })];
-            });
-        });
-    },
-};
-exports.default = (function (options) {
-    if (options === void 0) { options = {}; }
-    var pathPrefix = options.pathPrefix || '/cache';
-    return function () {
-        var app = this;
-        if (DISABLE_REDIS_CACHE !== 'true') {
-            app.use(pathPrefix + "/clear/single", serviceClearSingle);
-            app.use(pathPrefix + "/clear/group", serviceClearGroup);
-            app.use(pathPrefix + "/clear/all", serviceClearAll);
-            app.use(pathPrefix + "/flashdb", serviceFlashDb);
+    return { client };
+}
+function ok(message, status = HTTP_OK) {
+    return { message, status };
+}
+function fail(message, status = HTTP_SERVER_ERROR) {
+    return { message, status };
+}
+class ServiceClearSingle {
+    async setup(app) { this.app = app; }
+    async find(params) {
+        const { client, error } = ensureClient(this.app);
+        if (error)
+            return error;
+        const keyPrefix = getKeyPrefix(this.app);
+        const target = String(params?.query?.target ?? '');
+        if (!target)
+            return fail('You must provide key', HTTP_BAD_REQUEST);
+        const logicalKey = stripPrefix(target, keyPrefix);
+        try {
+            const exists = await client.get(logicalKey);
+            if (!exists)
+                return ok(`cache already cleared for key ${target}`, HTTP_NO_CONTENT);
+            const del = typeof client.unlink === 'function' ? client.unlink.bind(client) : client.del.bind(client);
+            const deleted = await del(logicalKey);
+            if (!deleted)
+                return ok(`cache already cleared for key ${target}`, HTTP_NO_CONTENT);
+            return ok(`cache cleared for key ${target}`);
         }
+        catch (err) {
+            return fail('something went wrong: ' + (err?.message ?? String(err)));
+        }
+    }
+}
+class ServiceClearGroup {
+    async setup(app) { this.app = app; }
+    async find(params) {
+        const { client, error } = ensureClient(this.app);
+        if (error)
+            return error;
+        const keyPrefix = getKeyPrefix(this.app);
+        const target = String(params?.query?.target ?? '').trim();
+        if (!target)
+            return fail('Target is required', HTTP_BAD_REQUEST);
+        const group = /^[\-]?\d+$/.test(target) ? target : hashCode(`group-${target}`);
+        try {
+            await purgeGroup(client, group, keyPrefix);
+            return ok(`cache cleared for group ${target}`);
+        }
+        catch (err) {
+            return fail(err?.message ?? 'Unknown error');
+        }
+    }
+}
+class ServiceClearAll {
+    async setup(app) { this.app = app; }
+    async find() {
+        const { client, error } = ensureClient(this.app);
+        if (error)
+            return error;
+        const keyPrefix = getKeyPrefix(this.app);
+        try {
+            await purgeGroup(client, '', keyPrefix);
+            return ok('cache cleared');
+        }
+        catch (err) {
+            return fail(err?.message ?? 'Unknown error');
+        }
+    }
+}
+class ServiceFlushDb {
+    async setup(app) { this.app = app; }
+    async find() {
+        const { client, error } = ensureClient(this.app);
+        if (error)
+            return error;
+        try {
+            await client.flushdb();
+            return ok('Cache cleared');
+        }
+        catch (err) {
+            return fail(err?.message ?? 'Unknown error');
+        }
+    }
+}
+export default function registerCacheMaintenance(options = {}) {
+    const pathPrefix = options.pathPrefix || '/cache';
+    return function register(app) {
+        const a = app ?? this;
+        if (DISABLE_REDIS_CACHE === 'true')
+            return;
+        a.use(`${pathPrefix}/clear/single`, new ServiceClearSingle());
+        a.use(`${pathPrefix}/clear/group`, new ServiceClearGroup());
+        a.use(`${pathPrefix}/clear/all`, new ServiceClearAll());
+        a.use(`${pathPrefix}/flushdb`, new ServiceFlushDb());
     };
-});
+}
 //# sourceMappingURL=services.js.map

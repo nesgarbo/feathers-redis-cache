@@ -1,11 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.client = require('./client').default;
-exports.services = require('./services').default;
-exports.hooks = require('./hooks').default;
-exports.default = {
-    client: exports.client,
-    services: exports.services,
-    hooks: exports.hooks,
+import client from './client.js';
+import services from './services.js';
+import hooks from './hooks.js';
+export { client, services, hooks };
+export default {
+    client,
+    services,
+    hooks
 };
 //# sourceMappingURL=index.js.map

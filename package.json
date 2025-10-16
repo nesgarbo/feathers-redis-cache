@@ -1,65 +1,83 @@
 {
-  "name": "feathers-redis-cache",
-  "description": "Redis cache for feathers service",
-  "version": "1.2.2",
-  "homepage": "git://github.com/sarkistlt/feathers-redis-cache",
-  "main": "build/index.js",
-  "keywords": [
-    "feathers",
-    "feathersjs",
-    "feathers-hooks",
-    "redis",
-    "feathers-cache",
-    "feathers-redis-cache",
-    "cache"
-  ],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git://github.com/sarkistlt/feathers-redis-cache.git"
-  },
-  "author": {
-    "name": "Sarkis Arutiunian",
-    "email": "sarkis.tlt@gmail.com"
-  },
-  "scripts": {
-    "build": "rm -rf ./lib && NODE_ENV=production tsc",
-    "release": "npx semantic-release",
-    "commit": "npm run build && git add . && npx git-cz && git push",
-    "prepublish": "npm run build"
-  },
-  "config": {
-    "commitizen": {
-      "path": "./node_modules/cz-conventional-changelog"
-    }
-  },
-  "dependencies": {
-    "async": "^2.6.2",
-    "chalk": "^2.4.2",
-    "moment": "^2.21.0",
-    "qs": "^6.5.1",
-    "redis": "^3.0.2"
-  },
-  "devDependencies": {
-    "@semantic-release/changelog": "^3.0.0",
-    "@semantic-release/git": "^7.0.4",
-    "@semantic-release/github": "^5.0.6",
-    "@semantic-release/npm": "^5.0.4",
-    "@typescript-eslint/eslint-plugin": "^1.7.0",
-    "@typescript-eslint/parser": "^1.7.0",
-    "commitizen": "^3.0.2",
-    "cz-conventional-changelog": "^2.1.0",
-    "eslint": "^5.12.0",
-    "eslint-config-airbnb": "^17.1.0",
-    "eslint-plugin-import": "^2.14.0",
-    "eslint-plugin-jsx-a11y": "^6.1.2",
-    "eslint-plugin-react": "^7.12.4",
-    "jest": "^23.6.0",
-    "ngrok": "^3.1.0",
-    "nodemon": "^1.17.3",
-    "rimraf": "^2.6.2",
-    "semantic-release": "^15.9.17",
-    "ts-node": "^8.1.0",
-    "typescript": "^3.4.4"
-  }
+    "name": "@nesgarbo/feathers-redis-cache",
+    "description": "Redis/Dragonfly cache for Feathers service (v5-friendly, ESM)",
+    "version": "1.2.4",
+    "type": "module",
+    "homepage": "https://github.com/nesgarbo/feathers-redis-cache",
+    "repository": {
+        "type": "git",
+        "url": "git://github.com/nesgarbo/feathers-redis-cache.git"
+    },
+    "author": {
+        "name": "Néstor García",
+        "email": "nesgarbo@icloud.com"
+    },
+    "license": "MIT",
+    "keywords": [
+        "feathers",
+        "feathersjs",
+        "hooks",
+        "redis",
+        "dragonfly",
+        "cache",
+        "feathers-redis-cache",
+        "feathers-v5",
+        "esm"
+    ],
+    "engines": {
+        "node": ">=22"
+    },
+    "main": "./build/index.js",
+    "types": "./build/index.d.ts",
+    "files": [
+        "build",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "build": "rm -rf build && tsc -p tsconfig.json",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "lint": "eslint .",
+        "test": "jest",
+        "prepare": "npm run build",
+        "release": "semantic-release",
+        "commit": "npm run build && npx git-cz && git push",
+        "prepublishOnly": "npm run build"
+    },
+    "dependencies": {
+        "ioredis": "^5.8.1",
+        "pino": "^10.0.0",
+        "pino-pretty": "^13.1.2"
+    },
+    "devDependencies": {
+        "@commitlint/cli": "^20.1.0",
+        "@commitlint/config-conventional": "^20.0.0",
+        "@feathersjs/feathers": "^5.0.35",
+        "@semantic-release/changelog": "^6.0.3",
+        "@semantic-release/git": "^10.0.1",
+        "@semantic-release/github": "^12.0.0",
+        "@semantic-release/npm": "^13.0.0",
+        "@types/jest": "^30.0.0",
+        "@types/node": "^24.8.0",
+        "@typescript-eslint/eslint-plugin": "^8.46.1",
+        "@typescript-eslint/parser": "^8.46.1",
+        "commitizen": "^4.3.1",
+        "cz-conventional-changelog": "^3.3.0",
+        "eslint": "^9.37.0",
+        "eslint-config-prettier": "^10.1.8",
+        "eslint-plugin-import": "^2.32.0",
+        "jest": "^30.2.0",
+        "prettier": "^3.6.2",
+        "semantic-release": "^25.0.0",
+        "typescript": "^5.9.3"
+    },
+    "config": {
+        "commitizen": {
+            "path": "./node_modules/cz-conventional-changelog"
+        }
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "sideEffects": false
 }

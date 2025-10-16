@@ -1,45 +1,67 @@
-"use strict";
-var __assign = (this && this.__assign) || function () {
-    __assign = Object.assign || function(t) {
-        for (var s, i = 1, n = arguments.length; i < n; i++) {
-            s = arguments[i];
-            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
-                t[p] = s[p];
-        }
-        return t;
-    };
-    return __assign.apply(this, arguments);
-};
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-var redis_1 = __importDefault(require("redis"));
-var chalk_1 = __importDefault(require("chalk"));
-var DISABLE_REDIS_CACHE = process.env.DISABLE_REDIS_CACHE;
-var defaultPrefix = 'frc_';
-exports.default = (function (options) {
-    if (options === void 0) { options = {}; }
-    var errorLogger = options.errorLogger || console.error;
-    var retryInterval = options.retryInterval || 5000;
+import { Redis } from 'ioredis';
+import { logger } from './logger.js';
+const { DISABLE_REDIS_CACHE } = process.env;
+const defaultPrefix = 'frc_';
+export default (options = {}) => {
+    const errorLogger = options.errorLogger || logger.error.bind(logger);
+    const fallbackMin = options.retryInterval ?? 5000;
+    const baseDelay = options.baseRetryDelay ?? 500;
+    const maxDelay = options.maxRetryDelay ?? 30000;
     if (DISABLE_REDIS_CACHE === 'true') {
-        return function () { };
+        return () => { };
     }
     return function client() {
-        var app = this;
-        var config = app.get('redis') || {};
+        const app = this;
+        const existing = app.get('redisClient');
+        if (existing && !['end', 'close'].includes(existing.status)) {
+            return this;
+        }
+        const rawConfig = app.get('redis') || {};
         try {
-            var redisOptions = __assign({ prefix: defaultPrefix }, config, { retry_strategy: function () {
-                    app.set('redisClient', undefined);
-                    console.log(chalk_1.default.yellow('[redis]') + " not connected");
-                    return retryInterval;
-                } });
-            var client_1 = redis_1.default.createClient(redisOptions);
-            app.set('redisClient', client_1);
-            client_1.on('ready', function () {
-                app.set('redisClient', client_1);
-                console.log(chalk_1.default.green('[redis]') + " connected");
+            const { prefix, retry_strategy, url, ...rest } = rawConfig;
+            const keyPrefix = (typeof rawConfig.keyPrefix === 'string' && rawConfig.keyPrefix.length > 0)
+                ? rawConfig.keyPrefix
+                : (typeof prefix === 'string' && prefix.length > 0 ? prefix : defaultPrefix);
+            const compatRetryStrategy = typeof rawConfig.retryStrategy === 'function'
+                ? rawConfig.retryStrategy
+                : (typeof retry_strategy === 'function'
+                    ? retry_strategy
+                    : (attempts) => {
+                        const exp = Math.min(maxDelay, Math.round(baseDelay * Math.pow(2, attempts)));
+                        const jitter = Math.floor(Math.random() * (exp * 0.25));
+                        const delay = Math.max(fallbackMin, exp + jitter);
+                        logger.warn(`[redis] reconnecting in ${delay}ms (attempt ${attempts})`);
+                        return delay;
+                    });
+            const redisOptions = {
+                keyPrefix,
+                lazyConnect: options.lazyConnect ?? false,
+                enableOfflineQueue: true,
+                maxRetriesPerRequest: null,
+                ...rest,
+                retryStrategy: compatRetryStrategy
+            };
+            const client = typeof url === 'string' && url.length > 0
+                ? new Redis(url, redisOptions)
+                : new Redis(redisOptions);
+            app.set('redisClient', client);
+            client.on('ready', () => {
+                logger.info('[redis] connected');
             });
+            client.on('reconnecting', () => {
+                logger.warn('[redis] reconnecting...');
+            });
+            client.on('end', () => {
+                logger.warn('[redis] connection ended');
+            });
+            client.on('error', (err) => {
+                errorLogger(err);
+            });
+            if (redisOptions.lazyConnect === true) {
+                client.connect().catch((err) => {
+                    errorLogger(err);
+                });
+            }
         }
         catch (err) {
             errorLogger(err);
@@ -47,5 +69,5 @@ exports.default = (function (options) {
         }
         return this;
     };
-});
+};
 //# sourceMappingURL=client.js.map
